@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <application
+        android:name=".App"
+        android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
+        android:label="TVBox Spider Bridge"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.App"
+        android:usesCleartextTraffic="true"
+        tools:replace="android:label">
+
+        <!-- The full TV app declares these components in the base manifest.
+             This bridge excludes their implementations, so they must not be
+             merged into the server-only APK. In particular, Startup would
+             otherwise be created by AndroidX before BridgeActivity opens. -->
+        <provider
+            android:name="androidx.startup.InitializationProvider"
+            tools:node="remove" />
+        <activity
+            android:name=".ui.activity.CrashActivity"
+            tools:node="remove" />
+        <receiver
+            android:name=".receiver.ActionReceiver"
+            tools:node="remove" />
+        <service
+            android:name=".service.PlaybackService"
+            tools:node="remove" />
+        <service
+            android:name=".server.BridgeServerService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync"
+            android:stopWithTask="false" />
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            tools:node="remove" />
+
+        <activity
+            android:name=".BridgeActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

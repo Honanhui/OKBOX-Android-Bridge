@@ -1,0 +1,171 @@
+import com.android.build.api.artifact.SingleArtifact
+import com.fongmi.gradle.AbiApkPackaging
+
+plugins {
+    alias libs.plugins.android.application
+}
+
+def localProps = new Properties()
+def localPropsFile = rootProject.file('local.properties')
+if (localPropsFile.exists()) {
+    localPropsFile.withInputStream { localProps.load(it) }
+}
+
+// Standalone version configuration.
+def bridgeProps = new Properties()
+rootProject.file('bridge.properties').withInputStream { bridgeProps.load(it) }
+def okboxVersionName = providers.gradleProperty('bridgeVersionName').getOrElse(bridgeProps.getProperty('versionName'))
+
+android {
+    namespace = 'com.fongmi.android.tv'
+
+    compileSdk libs.versions.compileSdk.get().toInteger()
+
+    defaultConfig {
+        applicationId "com.fongmi.android.tv"
+        minSdk libs.versions.minSdk.get().toInteger()
+        targetSdk libs.versions.targetSdk.get().toInteger()
+        versionCode providers.gradleProperty('bridgeVersionCode').getOrElse(bridgeProps.getProperty('versionCode')).toInteger()
+        versionName okboxVersionName
+        javaCompileOptions {
+            annotationProcessorOptions {
+                arguments = ["room.schemaLocation": "$projectDir/schemas".toString(), "eventBusIndex": "com.fongmi.android.tv.event.EventIndex"]
+            }
+        }
+    }
+
+    flavorDimensions = ["device"]
+
+    productFlavors {
+        leanback {
+            dimension "device"
+        }
+        mobile {
+            dimension "device"
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+        dataBinding = false
+        viewBinding = false
+    }
+
+    signingConfigs {
+        release {
+            if (localProps['storeFile']) {
+                storeFile file(localProps['storeFile'])
+                keyAlias localProps['keyAlias']
+                keyPassword localProps['storePassword']
+                storePassword localProps['storePassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled = true
+            shrinkResources = true
+            signingConfig = signingConfigs.release
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro', 'proguard-rules-media.pro'
+        }
+    }
+
+    configurations.configureEach {
+        exclude group: 'stax', module: 'stax-api'
+        exclude group: 'xpp3', module: 'xpp3'
+        exclude group: 'com.android.support'
+        resolutionStrategy {
+            force libs.okhttp
+        }
+    }
+
+    lint {
+        disable 'UnsafeOptInUsageError'
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    compileOptions {
+        coreLibraryDesugaringEnabled = true
+        sourceCompatibility JavaVersion.VERSION_21
+        targetCompatibility JavaVersion.VERSION_21
+    }
+
+    sourceSets {
+        mobile {
+            manifest.srcFile 'src/bridge/AndroidManifest.xml'
+            java.exclude '**/*.java'
+        }
+        main {
+            java.exclude '**/browse/**'
+            java.exclude '**/dlna/**'
+            java.exclude '**/model/**'
+            java.exclude '**/playback/**'
+            java.exclude '**/player/**'
+            java.exclude '**/receiver/**'
+            java.exclude '**/service/**'
+            java.exclude '**/setting/**'
+            java.exclude '**/ui/**'
+            java.exclude '**/Startup.java'
+            java.exclude '**/api/LiveApi.java'
+            java.exclude '**/api/DanmakuApi.java'
+            java.exclude '**/api/SubtitleApi.java'
+            java.exclude '**/api/config/LiveConfig.java'
+            java.exclude '**/api/config/WallConfig.java'
+            java.exclude '**/bean/SubtitleSearchItem.java'
+            java.exclude '**/bean/SubtitleSearchPage.java'
+            java.exclude '**/event/ConfigEvent.java'
+            java.exclude '**/server/process/Action.java'
+            java.exclude '**/server/process/Cache.java'
+            java.exclude '**/server/process/Image.java'
+            java.exclude '**/server/process/Local.java'
+            java.exclude '**/server/process/Parse.java'
+            java.exclude '**/Updater.java'
+            java.exclude '**/utils/FileChooser.java'
+            java.exclude '**/utils/Notify.java'
+        }
+    }
+}
+
+AbiApkPackaging.configure(project, SingleArtifact.APK.INSTANCE)
+
+dependencies {
+    implementation fileTree(dir: "libs", include: ["*.aar"])
+    implementation project(':catvod')
+    implementation project(':chaquo')
+    implementation project(':quickjs')
+    implementation libs.appcompat
+    implementation libs.lifecycle.service
+    implementation libs.media
+    implementation libs.bundles.media3
+    implementation libs.palette
+    implementation libs.recyclerview
+    implementation libs.room.runtime
+    implementation libs.splashscreen
+    implementation libs.swiperefreshlayout
+    implementation libs.viewpager2
+    implementation libs.android.gif.drawable
+    implementation libs.bundles.glide
+    implementation libs.bundles.jupnp
+    implementation libs.customactivityoncrash
+    implementation libs.eventbus
+    implementation libs.flexbox
+    implementation libs.rtmp.client
+    implementation libs.lottie
+    implementation libs.material
+    implementation libs.materialdesigncolors
+    implementation libs.nanohttpd
+    implementation libs.zxing.core
+    implementation libs.newpipeextractor
+    implementation libs.permissionx
+    implementation libs.simple.xml
+    implementation libs.textdrawable
+    leanbackImplementation libs.leanback
+    leanbackImplementation libs.androidautosize
+    mobileImplementation libs.biometric
+    mobileImplementation libs.zxing.android.embedded
+    annotationProcessor libs.room.compiler
+    annotationProcessor libs.eventbus.annotation.processor
+    annotationProcessor libs.glide.compiler
+    coreLibraryDesugaring libs.desugar
+}
