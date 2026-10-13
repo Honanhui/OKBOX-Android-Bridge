@@ -26,6 +26,9 @@ BRIDGE_PYTHON="$(command -v python3.10)" ./gradlew :app:assembleMobileDebug
 ## 源支持
 目前支持：
 肥猫 http://肥猫.net/tv
+
 饭太硬 http://www.饭太硬.cc/tv
+
 王二小源http://tvbox.王二小放牛娃.top
+
 其它源暂时未清楚能否正常使用，如有发现源不适配可联系我。
