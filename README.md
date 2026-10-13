@@ -23,3 +23,9 @@ BRIDGE_PYTHON="$(command -v python3.10)" ./gradlew :app:assembleMobileDebug
 安装包位于 `app/build/outputs/apk/mobile/debug/`。版本在 `bridge.properties` 设置。项目独立构建，无需鸿蒙工程；Python 运行库由 Chaquopy 打入 APK。
 
 基于 [FongMi/TV](https://github.com/FongMi/TV) 与 CatVod，保留上游源码及 GPL-3.0 许可。视频源的可用性取决于对应服务。
+## 源支持
+目前支持：
+肥猫 http://肥猫.net/tv
+饭太硬 http://www.饭太硬.cc/tv
+王二小源http://tvbox.王二小放牛娃.top
+其它源暂时未清楚能否正常使用，如有发现源不适配可联系我。
