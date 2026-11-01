@@ -5,8 +5,10 @@ import android.content.Context;
 import com.fongmi.android.tv.App;
 import com.fongmi.android.tv.utils.Download;
 import com.fongmi.android.tv.utils.UrlUtil;
+import com.fongmi.android.tv.server.cloud.CloudTokenService;
 import com.github.catvod.crawler.Spider;
 import com.github.catvod.crawler.SpiderApi;
+import com.github.catvod.crawler.SpiderDebug;
 import com.github.catvod.crawler.SpiderNull;
 
 import com.github.catvod.net.OkHttp;
@@ -174,7 +176,46 @@ public class JarLoader {
             // the rest of the process lifetime. Only cache working instances.
             return created instanceof SpiderNull ? null : created;
         });
-        return spider == null ? new SpiderNull() : spider;
+        if (spider == null) return new SpiderNull();
+        injectBaiduCredential(siteKey, spiderApi, loaders.get(jaKey));
+        return spider;
+    }
+
+    /**
+     * Duopan keeps Baidu authorization in its own encrypted Spider storage
+     * (mi.baidu), so placing a Cookie in subscription ext has no effect.
+     * Run the Spider's own setter every time the site is acquired: the Spider
+     * cache remains valid while source switching and account updates still
+     * receive the currently selected Bridge credential.
+     */
+    private void injectBaiduCredential(String siteKey, String api, DexClassLoader loader) {
+        if (!"csp_Duopan".equals(api) || loader == null) return;
+        try {
+            String cookie = CloudTokenService.ensureFresh("baidu").optString("cookie").trim();
+            if (cookie.isEmpty()) return;
+            Class<?> credential = loader.loadClass("com.github.catvod.spider.merge.p.f");
+            Method write = credential.getDeclaredMethod("i", String.class);
+            write.setAccessible(true);
+            Object writeResult = write.invoke(null, cookie);
+
+            Class<?> baidu = loader.loadClass("com.github.catvod.spider.merge.b.C");
+            Method singleton = baidu.getDeclaredMethod("n");
+            singleton.setAccessible(true);
+            Object instance = singleton.invoke(null);
+            Method configured = baidu.getDeclaredMethod("A");
+            configured.setAccessible(true);
+            boolean verified = Boolean.TRUE.equals(configured.invoke(instance));
+            if (!Boolean.TRUE.equals(writeResult) || !verified) {
+                SpiderDebug.log("[Bridge] Baidu credential injection was not accepted for site=" + siteKey);
+                return;
+            }
+            SpiderDebug.log("[Bridge] Baidu credential injected and verified for site=" + siteKey);
+        } catch (Throwable error) {
+            // A non-Duopan JAR can use the same API key. Keep it usable and
+            // surface a redacted diagnostic instead of leaking credentials.
+            SpiderDebug.log("[Bridge] Baidu credential injection failed for site=" + siteKey
+                    + ": " + error.getClass().getSimpleName());
+        }
     }
 
     /** Creates an uncached Spider for a controlled source-health probe. */
@@ -188,6 +229,7 @@ public class JarLoader {
             spider.siteKey = key;
             spider.initApi(new SpiderApi());
             spider.init(App.get(), ext);
+            injectBaiduCredential(key, api, loader);
             return spider;
         } catch (Throwable e) {
             e.printStackTrace();

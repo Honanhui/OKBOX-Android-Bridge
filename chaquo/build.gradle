@@ -15,9 +15,10 @@ android {
         python {
             // Build-host Python is separate from the Android runtime embedded
             // by Chaquopy. CI/local standalone builds choose their own host.
+            def bundledPython = rootProject.file('../python310/python.exe')
             buildPython providers.gradleProperty('bridgePython').getOrElse(
                     providers.environmentVariable('BRIDGE_PYTHON').getOrElse(
-                            'python3.10'))
+                            bundledPython.exists() ? bundledPython.absolutePath : 'python3.10'))
             version = "3.10"
             pip {
                 install("-r", "requirements.txt")

@@ -1,12 +1,13 @@
 package com.fongmi.android.tv.server.cloud;
-
+import com.github.catvod.net.OkHttp;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.security.keystore.KeyGenParameterSpec;
 import android.security.keystore.KeyProperties;
+import com.fongmi.android.tv.App;
 import android.util.Base64;
 
-import com.fongmi.android.tv.App;
+
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -84,7 +85,7 @@ public final class CloudAccountStore {
         return PROVIDERS.containsKey(providerId);
     }
 
-    public static JSONObject save(String id, String providerId, String name, JSONObject values) throws Exception {
+    public static synchronized JSONObject save(String id, String providerId, String name, JSONObject values) throws Exception {
         return save(id, providerId, name, values, new JSONObject());
     }
 
@@ -101,9 +102,19 @@ public final class CloudAccountStore {
             String incoming = values.optString(field).trim();
             if (!incoming.isEmpty()) secret.put(field, incoming);
         }
+        if ("tianyi".equals(provider.id) && previous != null) {
+            JSONObject old = previous.optJSONObject("secret");
+            if (old != null && (!old.optString("username").equals(secret.optString("username"))
+                    || !old.optString("password").equals(secret.optString("password")))) secret.remove("cookie");
+        }
         for (String field : new String[]{"refresh_token", "access_token", "open_token", "open_refresh_token", "open_access_token", "device_id", "captcha_token", "oauth_client_id", "token", "authorization", "loginuuid"}) {
             String incoming = values.optString(field).trim();
             if (!incoming.isEmpty()) secret.put(field, incoming);
+        }
+        // Preserve provider protocol metadata together with the encrypted secret.
+        // Mobile's QR token alone is insufficient for the native Cat session.
+        for (String field : new String[]{"account", "auth_token", "userDomainId", "loginData", "token_type", "sub", "user_id", "expires_in", "expires_at"}) {
+            if (values.has(field) && !values.isNull(field)) secret.put(field, values.get(field));
         }
         for (String field : provider.required) {
             if ("aliyun".equals(provider.id) && "openToken".equals(field)) continue;
@@ -458,7 +469,9 @@ public final class CloudAccountStore {
         add(items, new Provider("aliyun", "阿里云盘", "oauth-token", "0", 2, new String[]{"refreshToken", "openToken"}, "刷新令牌", "开放刷新令牌（可选）"));
         add(items, new Provider("quark", "夸克网盘", "cookie", "0", 10, new String[]{"cookie"}, "Cookie"));
         add(items, new Provider("uc", "UC 网盘", "cookie", "0", 8, new String[]{"cookie"}, "Cookie"));
+        add(items, new Provider("uctv", "UC TV 网盘", "token", "0", 2, new String[]{"token"}, "TV Token"));
         add(items, new Provider("pan115", "115 网盘", "cookie", "0", 2, new String[]{"cookie"}, "Cookie"));
+        add(items, new Provider("pan123community", "123社区", "cookie", "0", 1, new String[]{"cookie"}, "123社区 Cookie（登录 pan1.me 后获取）"));
         add(items, new Provider("pan123", "123 网盘", "password", "0", 1, new String[]{"username", "password"}, "账号", "密码"));
         add(items, new Provider("tianyi", "天翼云盘", "password", "-11", 1, new String[]{"username", "password"}, "账号", "密码"));
         add(items, new Provider("mobile139", "移动云盘", "token", "0", 1, new String[]{"token"}, "令牌"));

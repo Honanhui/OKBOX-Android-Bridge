@@ -4,6 +4,7 @@ import com.fongmi.android.tv.server.cloud.CloudAccountStore;
 import com.fongmi.android.tv.server.cloud.CloudAccountValidator;
 import com.fongmi.android.tv.server.cloud.CloudAuthService;
 import com.fongmi.android.tv.server.cloud.CloudShare;
+import com.fongmi.android.tv.server.cloud.CloudTianyi;
 import com.fongmi.android.tv.server.impl.Process;
 
 import org.json.JSONObject;
@@ -35,6 +36,10 @@ public final class CloudAccounts implements Process {
             if ("validate".equals(action)) return json(CloudAccountValidator.validate(request.optString("id")));
             if ("auth-start".equals(action)) return json(CloudAuthService.start(request.optString("provider"), request.optString("name")));
             if ("auth-poll".equals(action)) return json(CloudAuthService.poll(request.optString("sessionId")));
+            if ("auth-cancel".equals(action)) return json(CloudAuthService.cancel(request.optString("sessionId")));
+            if ("tianyi-interactive-login".equals(action)) return json(CloudTianyi.login(request.optString("id"), false));
+            if ("tianyi-sms-send".equals(action)) return json(CloudTianyi.send(request.optString("id")));
+            if ("tianyi-sms-submit".equals(action)) return json(CloudTianyi.submit(request.optString("id"), request.optString("code")));
             if ("authorization".equals(action)) return json(authorization(request.optString("provider")));
             return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Unknown account action");
         } catch (IllegalArgumentException e) {

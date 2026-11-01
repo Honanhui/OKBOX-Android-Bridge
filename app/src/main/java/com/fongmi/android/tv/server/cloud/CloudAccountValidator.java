@@ -1,6 +1,8 @@
 package com.fongmi.android.tv.server.cloud;
-
 import com.github.catvod.net.OkHttp;
+import android.util.Base64;
+
+
 
 import org.json.JSONObject;
 
@@ -27,12 +29,20 @@ public final class CloudAccountValidator {
         JSONObject secret = account.optJSONObject("secret");
         if (secret == null) secret = new JSONObject();
         try {
+            if ("tianyi".equals(provider)) return CloudTianyi.validate(id);
             String message = switch (provider) {
                 case "aliyun" -> validateAliyun();
+                case "uc" -> validateUc(secret);
+                case "uctv" -> CloudUcTv.validate(secret);
+                case "quark" -> validateQuark(secret);
+                case "baidu" -> validateBaidu(secret);
+                case "mobile139" -> validateMobileAuthorization(account, secret);
                 case "pan123" -> validate123(secret);
+                case "pan115" -> validate115(secret);
+                case "pan123community" -> validate123Community(secret);
                 case "thunder" -> validateThunder(secret);
                 case "bilibili" -> validateBilibili(secret);
-                default -> validateRequired(secret, provider);
+                default -> throw new IllegalStateException("尚未实现该网盘的官方登录校验，无法确认凭证有效性");
             };
             return CloudAccountStore.setValidation(id, "valid", message);
         } catch (VerificationRequiredException error) {
@@ -47,6 +57,10 @@ public final class CloudAccountValidator {
     /** Explicit sign-in path. Account-card checks must continue to use {@link #validate(String)}. */
     public static JSONObject login(String id) throws Exception {
         JSONObject account = CloudAccountStore.account(id);
+        if ("tianyi".equals(account.optString("provider"))) {
+            try { return CloudTianyi.login(id); }
+            catch (Exception error) { return CloudAccountStore.setValidation(id, "invalid", error.getMessage() == null ? "天翼登录失败" : error.getMessage()); }
+        }
         if (!"thunder".equals(account.optString("provider"))) return validate(id);
         JSONObject secret = account.optJSONObject("secret");
         if (secret == null) secret = new JSONObject();
@@ -61,10 +75,176 @@ public final class CloudAccountValidator {
         }
     }
 
+    private static JSONObject official(Request request, String provider) throws Exception {
+        try (Response response = OkHttp.client(12_000).newCall(request).execute()) {
+            String text = response.body() == null ? "" : response.body().string();
+            JSONObject result;
+            try { result = new JSONObject(text); } catch (Exception error) {
+                throw new IllegalStateException(provider + "登录校验未返回有效 JSON（HTTP " + response.code() + "）");
+            }
+            if (!response.isSuccessful()) throw new IllegalStateException(provider + "登录校验失败（HTTP " + response.code() + "）：" + first(result, "message", "msg", "error_description"));
+            return result;
+        }
+    }
+
+    private static String validateQuark(JSONObject secret) throws Exception {
+        String cookie = first(secret, "cookie", "Cookie");
+        if (cookie.isEmpty()) throw new IllegalStateException("夸克 Cookie 为空，请重新登录");
+        JSONObject result = official(new Request.Builder().url("https://drive-pc.quark.cn/1/clouddrive/member?pr=ucpro&fr=pc&uc_param_str=&fetch_subscribe=true&fetch_identity=true")
+            .header("Cookie", cookie).header("Referer", "https://pan.quark.cn/").header("User-Agent", "Mozilla/5.0").build(), "夸克");
+        if (result.optInt("status", -1) != 200 || result.optInt("code", 0) != 0 || result.optJSONObject("data") == null)
+            throw new IllegalStateException("夸克 Cookie 校验失败：" + first(result, "message", "msg") + "（status=" + result.optInt("status", -1) + "，code=" + result.optInt("code", -1) + "）");
+        return "登录有效";
+    }
+
+    private static String validateBaidu(JSONObject secret) throws Exception {
+        String cookie = first(secret, "cookie", "Cookie");
+        if (cookie.isEmpty()) throw new IllegalStateException("百度 Cookie 为空，请重新登录");
+        JSONObject result = official(new Request.Builder().url("https://pan.baidu.com/rest/2.0/membership/user/info?method=query&clienttype=0&app_id=250528&web=1")
+            .header("Cookie", cookie).header("Referer", "https://pan.baidu.com/disk/main").header("User-Agent", "netdisk").build(), "百度");
+        JSONObject user = result.optJSONObject("user_info");
+        int code = result.has("errno") ? result.optInt("errno", -1) : result.optInt("error_code", 0);
+        if (code != 0 || user == null || user.optLong("uk", 0) <= 0)
+            throw new IllegalStateException("百度 Cookie 校验失败：" + first(result, "errmsg", "message", "msg") + "（code=" + code + (user == null ? "，缺少用户信息" : "") + "）");
+        return "登录有效";
+    }
+
+    private static String validateMobileAuthorization(JSONObject account, JSONObject secret) throws Exception {
+        String decoded;
+        try { decoded = new String(java.util.Base64.getDecoder().decode(first(secret, "token")), "UTF-8"); }
+        catch (Exception error) { throw new IllegalStateException("移动 Token 格式无效，请重新扫码登录"); }
+        String[] parts = decoded.split(":", 3);
+        if (parts.length != 3 || parts[1].isBlank() || parts[2].isBlank()) throw new IllegalStateException("移动 Token 缺少账号或授权信息，请重新扫码登录");
+        parts[2] = CloudProviderQrService.normalizeMobile139Token(parts[2], "");
+        String xml = "<root><token>" + xmlEscape(parts[2]) + "</token><account>" + xmlEscape(parts[1]) + "</account><clienttype>656</clienttype></root>";
+        Request request = new Request.Builder().url("https://aas.caiyun.feixin.10086.cn/tellin/authTokenRefresh.do")
+            .post(RequestBody.create(MediaType.parse("application/xml; charset=utf-8"), xml)).build();
+        try (Response response = OkHttp.client(12_000).newCall(request).execute()) {
+            if (!response.isSuccessful()) throw new IllegalStateException("移动官方 Token 授权检查失败（HTTP " + response.code() + "）");
+            String body = response.body() == null ? "" : response.body().string();
+            javax.xml.parsers.DocumentBuilderFactory factory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
+            factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
+            factory.setFeature("http://xml.org/sax/features/external-general-entities", false);
+            factory.setFeature("http://xml.org/sax/features/external-parameter-entities", false);
+            org.w3c.dom.Document document = factory.newDocumentBuilder().parse(new java.io.ByteArrayInputStream(body.getBytes(StandardCharsets.UTF_8)));
+            String code = xmlValue(document, "return"), token = xmlValue(document, "token");
+            if (!"0".equals(code) || token.isBlank()) throw new IllegalStateException("移动官方 Token 授权检查失败：" + xmlValue(document, "desc") + "（code=" + code + "）");
+            String refreshed = java.util.Base64.getEncoder().encodeToString((parts[0] + ":" + parts[1] + ":" + token).getBytes(StandardCharsets.UTF_8));
+            JSONObject values = new JSONObject().put("token", refreshed).put("authorization", "Basic " + refreshed).put("account", parts[1]).put("auth_token", token);
+            JSONObject loginData = secret.optJSONObject("loginData");
+            if (loginData != null) values.put("loginData", new JSONObject(loginData.toString()).put("token", token));
+            CloudAccountStore.save(account.optString("id"), "mobile139", account.optString("name"), values, account);
+            return "登录有效，已通过官方 Token 授权检查";
+        }
+    }
+    private static String xmlEscape(String value) { return value.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"); }
+    private static String xmlValue(org.w3c.dom.Document document, String tag) {
+        org.w3c.dom.NodeList nodes = document.getElementsByTagName(tag);
+        return nodes.getLength() == 0 ? "" : nodes.item(0).getTextContent().trim();
+    }
+    private static String validateMobile(JSONObject secret) throws Exception {
+        String token = first(secret, "token");
+        if (token.isEmpty()) throw new IllegalStateException("移动 Token 为空，请重新登录");
+        String account = first(secret, "account");
+        if (account.isEmpty()) {
+            try { String[] parts = new String(java.util.Base64.getDecoder().decode(token), "UTF-8").split(":"); if (parts.length > 1) account = parts[1]; }
+            catch (Exception error) { throw new IllegalStateException("移动 Token 格式无效，请重新扫码登录"); }
+        }
+        if (account.isEmpty()) throw new IllegalStateException("移动授权缺少账号信息，请重新登录");
+        String domain = first(secret, "userDomainId", "user_domain_id");
+        JSONObject bodyObject = new JSONObject();
+        if (!domain.isEmpty()) bodyObject.put("userDomainId", domain);
+        else bodyObject.put("commonAccountInfo", new JSONObject().put("account", account).put("accountType", 1));
+        String body = bodyObject.toString();
+        String ts = java.time.LocalDateTime.now(java.time.ZoneId.of("Asia/Shanghai")).format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss"));
+        String nonce = UUID.randomUUID().toString().replace("-", "").substring(0,16);
+        String encoded = java.net.URLEncoder.encode(body, "UTF-8").replace("+", "%20").replace("%21", "!").replace("%27", "'").replace("%28", "(").replace("%29", ")").replace("%7E", "~");
+        char[] chars = encoded.toCharArray(); java.util.Arrays.sort(chars);
+        String b64 = java.util.Base64.getEncoder().encodeToString(new String(chars).getBytes(StandardCharsets.UTF_8));
+        String sign = digest("MD5", digest("MD5", b64) + digest("MD5", ts + ":" + nonce)).toUpperCase(java.util.Locale.ROOT);
+        JSONObject result = official(new Request.Builder().url("https://user-njs.yun.139.com/user/disk/quota/detail")
+            .header("Authorization", "Basic " + token).header("caller", "web").header("mcloud-channel", "1000101").header("mcloud-client", "10701").header("mcloud-version", "7.14.0").header("mcloud-sign", ts + "," + nonce + "," + sign)
+            .header("CMS-DEVICE", "default").header("Origin", "https://yun.139.com").header("Referer", "https://yun.139.com/w/").header("x-DeviceInfo", "||9|7.14.0|chrome|120.0.0.0|||windows 10||zh-CN|||").header("x-huawei-channelSrc", "10000034").header("x-inner-ntwk", "2").header("x-m4c-caller", "PC").header("x-m4c-src", "10002").header("x-SvcType", "1").header("Inner-Hcy-Router-Https", "1")
+            .post(RequestBody.create(MediaType.parse("application/json; charset=utf-8"), body)).build(), "移动");
+        JSONObject data = result.optJSONObject("data");
+        JSONObject status = result.optJSONObject("result");
+        String code = status == null ? first(result, "code", "resultCode") : first(status, "resultCode", "code");
+        if ((!code.isEmpty() && !"0".equals(code) && !"000000".equals(code)) || data == null || !data.has("diskSize"))
+            throw new IllegalStateException("移动 Token 校验失败：" + (status == null ? first(result, "message", "msg", "resultDesc") : first(status, "resultDesc", "message")) + "（code=" + code + "）");
+        return "登录有效";
+    }
+    private static String validateUc(JSONObject secret) throws Exception {
+        String cookie = first(secret, "cookie", "Cookie");
+        if (cookie.isEmpty()) throw new IllegalStateException("UC Cookie 为空，请扫码登录");
+        Request request = new Request.Builder().url("https://pc-api.uc.cn/1/clouddrive/file/sort?pr=UCBrowser&fr=pc&pdir_fid=0&_page=1&_size=1&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc")
+                .header("Cookie", cookie).header("Referer", "https://drive.uc.cn/")
+                .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36").build();
+        try (Response response = OkHttp.client(12_000).newCall(request).execute()) {
+            String body = response.body() == null ? "" : response.body().string();
+            JSONObject result = body.isEmpty() ? new JSONObject() : new JSONObject(body);
+            if (response.code() == 401 || result.optInt("status") == 401) throw new IllegalStateException("UC Cookie 已失效或授权被拒绝，请重新扫码登录（HTTP 401）");
+            if (!response.isSuccessful() || result.optInt("status", -1) != 200) throw new IllegalStateException("UC 官方目录验证失败（HTTP " + response.code() + "），不能确认登录有效");
+            return "登录有效，已通过 UC 官方目录检查";
+        }
+    }
     private static String validateAliyun() throws Exception {
         JSONObject secret = CloudTokenService.ensureFresh("aliyun");
         if (first(secret, "access_token", "accessToken").isEmpty()) throw new IllegalStateException("阿里云盘授权已失效，请重新扫码登录");
         return "登录有效，Token 已刷新";
+    }
+
+    private static String validate115(JSONObject secret) throws Exception {
+        String cookie = secret.optString("cookie").trim();
+        if (cookie.isEmpty() || cookie.contains("\r") || cookie.contains("\n")) throw new IllegalStateException("请填写有效的115 Cookie");
+        Request request = new Request.Builder().url("https://my.115.com/?ct=ajax&ac=nav")
+            .header("Cookie", cookie).header("Referer", "https://115.com/")
+            .header("User-Agent", "Mozilla/5.0").build();
+        return parse115Identity(official(request, "115"));
+    }
+
+    static String parse115Identity(JSONObject result) {
+        JSONObject data = result.optJSONObject("data");
+        if (!result.optBoolean("state") || data == null || first(data, "user_id", "uid").isEmpty())
+            throw new IllegalStateException("115 Cookie未通过登录校验，请重新登录后更新");
+        String name = first(data, "user_name", "uname", "nick_name", "nickname");
+        return name.isEmpty() ? "115登录有效；接口未返回账号名称" : "115登录有效，账号：" + name;
+    }
+
+    private static String validate123Community(JSONObject secret) throws Exception {
+        String cookie = secret.optString("cookie").trim();
+        if (cookie.isEmpty() || cookie.contains("\r") || cookie.contains("\n")) throw new IllegalStateException("请填写有效的123社区Cookie");
+        Request request = new Request.Builder().url("https://pan1.me/my.htm").header("Cookie", cookie).header("User-Agent", "Mozilla/5.0").build();
+        try (Response response = OkHttp.client(12000).newBuilder().followRedirects(false).build().newCall(request).execute()) {
+            String html = response.body() == null ? "" : response.body().string();
+            if (!response.isSuccessful() || !html.contains("user-logout.htm")) throw new IllegalStateException("社区Cookie未通过登录校验，请在pan1.me正常登录后更新");
+            String username = communityUsername(html);
+            if (username.isEmpty()) {
+                Request profileRequest = request.newBuilder().url("https://pan1.me/?my-profile.htm").build();
+                try (Response profile = OkHttp.client(12000).newBuilder().followRedirects(false).build().newCall(profileRequest).execute()) {
+                    String page = profile.body() == null ? "" : profile.body().string();
+                    if (profile.isSuccessful() && page.contains("user-logout.htm")) username = communityUsername(page);
+                } catch (Exception ignored) { /* Valid login remains valid if the optional name lookup fails. */ }
+            }
+            return username.isEmpty() ? "社区登录有效；页面未返回账号名称" : "社区登录有效，账号：" + username;
+        }
+    }
+
+
+    /** Only read the signed-in profile form/navigation; never a post author or script value. */
+    static String communityUsername(String html) {
+        org.jsoup.nodes.Document page = org.jsoup.Jsoup.parse(html);
+        String name = "";
+        org.jsoup.nodes.Element input = page.selectFirst("input[name=username]");
+        if (input != null) name = input.val();
+        if (name.isBlank()) { org.jsoup.nodes.Element sidebar = page.selectFirst(".sidebar-user-section-username"); if (sidebar != null) name = sidebar.text(); }
+        if (name.isBlank()) for (org.jsoup.nodes.Element link : page.select("a.username[href]")) {
+            if (link.attr("href").matches("(?:https://pan1[.]me/|/)?[?]?my(?:-profile)?[.]htm(?:[?#].*)?")) {
+                String text = link.text().trim();
+                if (!text.matches("我的.*|个人.*|账号.*|设置|用户中心|基本资料|修改密码|修改头像")) name = text;
+            }
+        }
+        String clean = name.replaceAll("[\\p{Cntrl}]", "").trim();
+        return clean.substring(0, Math.min(80, clean.length()));
     }
 
     private static String validate123(JSONObject secret) throws Exception {
@@ -319,7 +499,7 @@ public final class CloudAccountValidator {
 
     private static String validateRequired(JSONObject secret, String provider) {
         if (secret.length() == 0) throw new IllegalStateException(CloudAccountStore.providerName(provider) + "凭据为空");
-        return "凭据完整，播放时由网盘适配器继续校验";
+        return "Token/Cookie 或账号凭据已保存，尚未在线校验登录状态";
     }
 
     private static String first(JSONObject object, String... keys) {

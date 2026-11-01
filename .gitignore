@@ -1,10 +1,9 @@
 .gradle/
 **/build/
-**/.bridge-build/
 .idea/
 local.properties
 *.jks
 *.keystore
-Release/
+*.log
+*.apk
 __pycache__/
-*.pyc

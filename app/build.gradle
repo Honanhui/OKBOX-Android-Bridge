@@ -11,10 +11,16 @@ if (localPropsFile.exists()) {
     localPropsFile.withInputStream { localProps.load(it) }
 }
 
-// Standalone version configuration.
+// Keep the Bridge dashboard and Android executor on the same visible version
+// as the HarmonyOS OKBOX application. AppScope/app.json5 is the single source
+// of truth; changing its versionName updates BuildConfig and the web UI too.
 def bridgeProps = new Properties()
 rootProject.file('bridge.properties').withInputStream { bridgeProps.load(it) }
-def okboxVersionName = providers.gradleProperty('bridgeVersionName').getOrElse(bridgeProps.getProperty('versionName'))
+def okboxAppFile = rootProject.file('../../AppScope/app.json5')
+def okboxAppText = okboxAppFile.exists() ? okboxAppFile.getText('UTF-8') : ''
+def okboxVersionMatch = okboxAppText =~ /["']versionName["']\s*:\s*["']([^"']+)["']/
+def defaultVersionName = okboxVersionMatch.find() ? okboxVersionMatch.group(1) : bridgeProps.getProperty('versionName')
+def okboxVersionName = providers.gradleProperty('bridgeVersionName').getOrElse(defaultVersionName)
 
 android {
     namespace = 'com.fongmi.android.tv'
@@ -134,6 +140,7 @@ dependencies {
     implementation project(':catvod')
     implementation project(':chaquo')
     implementation project(':quickjs')
+    implementation 'org.jsoup:jsoup:1.22.2'
     implementation libs.appcompat
     implementation libs.lifecycle.service
     implementation libs.media

@@ -1,8 +1,9 @@
 package com.fongmi.android.tv.server.cloud;
-
+import com.github.catvod.net.OkHttp;
+import android.util.Base64;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.util.Base64;
+
 
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.EncodeHintType;
@@ -37,6 +38,12 @@ public final class CloudAuthService {
     private CloudAuthService() {
     }
 
+    public static JSONObject cancel(String id) throws Exception {
+        if (id != null && id.startsWith(CloudProviderQrService.PREFIX)) return CloudProviderQrService.cancel(id);
+        if (id != null) SESSIONS.remove(id);
+        return new JSONObject().put("state", "cancelled").put("message", "登录已取消");
+    }
+
     public static JSONObject start(String provider, String name) throws Exception {
         cleanup();
         if (!"aliyun".equals(provider)) return CloudProviderQrService.start(provider, name);
@@ -49,7 +56,7 @@ public final class CloudAuthService {
                     System.currentTimeMillis() + source.optLong("expiresIn", 300L) * 1000L,
                     new JSONObject().put("cookies", source.optString("cookies")));
             queryAliQr(session);
-        } catch (Throwable directError) {
+        } catch (Exception directError) {
             JSONObject source = request("/alicloud2/generate_qr");
             payload = source.optString("qr_code_url");
             String providerSession = source.optString("session_id");

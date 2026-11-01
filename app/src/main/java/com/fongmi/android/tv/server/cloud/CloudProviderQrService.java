@@ -1,8 +1,9 @@
 package com.fongmi.android.tv.server.cloud;
-
+import com.github.catvod.net.OkHttp;
+import android.util.Base64;
 import android.graphics.Bitmap;
 import android.graphics.Color;
-import android.util.Base64;
+
 
 import com.google.zxing.BarcodeFormat;
 import com.google.zxing.EncodeHintType;
@@ -44,7 +45,9 @@ final class CloudProviderQrService {
     static final String PREFIX = "provider:";
     private static final String BROWSER_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36";
     private static final String UC_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) uc-cloud-drive/2.5.20 Chrome/100.0.4896.160 Electron/18.3.5.4-b478491100 Safari/537.36 Channel/pckk_other_ch";
-    private static final String PAN123_LOGIN = "https://login.123pan.com";
+    private static final String UC_WEB_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36";
+    private static final String PAN123_LOGIN = "https://user.123pan.cn";
+    private static final String PAN123_LOGIN_PAGE = PAN123_LOGIN + "/centerlogin?redirect_url=https%3A%2F%2Fyun.123pan.cn&source_page=website";
     private static final String MOBILE_139_BASE = "https://yun.139.com/orchestration/auth-rebuild";
     private static final String MOBILE_139_VERSION = "7.18.0";
     private static final String MOBILE_139_CLIENT = "10701";
@@ -66,6 +69,7 @@ final class CloudProviderQrService {
         Session session = switch (provider) {
             case "quark" -> startQuark(name);
             case "uc" -> startUc(name);
+            case "uctv" -> startUcTv(name);
             case "pan115" -> start115(name);
             case "pan123" -> start123(name);
             case "baidu" -> startBaidu(name);
@@ -89,6 +93,7 @@ final class CloudProviderQrService {
         return switch (session.provider) {
             case "quark" -> pollQuark(id, session);
             case "uc" -> pollUc(id, session);
+            case "uctv" -> pollUcTv(id, session);
             case "pan115" -> poll115(id, session);
             case "pan123" -> poll123(id, session);
             case "baidu" -> pollBaidu(id, session);
@@ -98,6 +103,11 @@ final class CloudProviderQrService {
             case "thunder" -> pollThunder(id, session);
             default -> throw new IllegalArgumentException("不支持的登录会话");
         };
+    }
+
+    static JSONObject cancel(String id) throws Exception {
+        if (id != null) SESSIONS.remove(id);
+        return new JSONObject().put("state", "cancelled").put("message", "登录已取消");
     }
 
     /** China Mobile Cloud's current web QR protocol (the same flow used by yun.139.com). */
@@ -153,9 +163,11 @@ final class CloudProviderQrService {
         // waiting, so only credential-bearing responses complete the session.
         boolean successful = !account.isEmpty() && !token.isEmpty();
         if (successful) {
+            token = normalizeMobile139Token(token, aesKey);
             String authorization = Base64.encodeToString(("pc:" + account + ":" + token).getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP);
             JSONObject values = new JSONObject().put("token", authorization).put("authorization", "Basic " + authorization)
-                    .put("account", account).put("auth_token", token);
+                    .put("account", account).put("auth_token", token).put("userDomainId", first(data, "userDomainId", "user_domain_id"))
+                    .put("loginData", data);
             JSONObject saved = CloudAccountStore.save("", session.provider, session.name, values);
             SESSIONS.remove(id);
             return new JSONObject().put("state", "complete").put("message", "移动云盘登录成功，授权已自动保存")
@@ -209,7 +221,8 @@ final class CloudProviderQrService {
         String access = first(result, "access_token");
         if (!access.isEmpty()) {
             JSONObject values = new JSONObject().put("access_token", access)
-                    .put("device_id", session.meta.optString("deviceId")).put("oauth_client_id", clientId);
+                    .put("device_id", session.meta.optString("deviceId")).put("oauth_client_id", clientId)
+                    .put("user_id", first(result, "user_id", "sub")).put("expires_in", result.optLong("expires_in", 7200));
             String refresh = first(result, "refresh_token");
             if (!refresh.isEmpty()) values.put("refresh_token", refresh);
             String tokenType = first(result, "token_type");
@@ -302,7 +315,8 @@ final class CloudProviderQrService {
         JSONObject result = jsonAllowError("POST", "https://account.guangyapan.com/v1/auth/token", jsonHeaders(), jsonBody(payload));
         String accessToken = result.optString("access_token");
         if (!accessToken.isEmpty()) {
-            JSONObject values = new JSONObject().put("token", accessToken).put("access_token", accessToken);
+            JSONObject values = new JSONObject().put("token", accessToken).put("access_token", accessToken)
+                    .put("token_type", result.optString("token_type", "Bearer")).put("sub", result.optString("sub"));
             String refreshToken = result.optString("refresh_token");
             if (!refreshToken.isEmpty()) values.put("refresh_token", refreshToken);
             JSONObject saved = CloudAccountStore.save("", session.provider, session.name, values);
@@ -347,12 +361,35 @@ final class CloudProviderQrService {
         values.put("client_id", "381");
         values.put("v", "1.2");
         values.put("request_id", String.valueOf(now));
-        JSONObject result = json("POST", "https://api.open.uc.cn/cas/ajax/getTokenForQrcodeLogin?__dt=0&__t=" + now, ucHeaders(), form(values));
+        Map<String, String> authHeaders = ucHeaders();
+        authHeaders.put("User-Agent", UC_WEB_UA);
+        HttpResult landing = request("GET", "https://drive.uc.cn/", authHeaders, null);
+        if (landing.code != 200) throw new IllegalStateException("UC 登录页面会话初始化失败（HTTP " + landing.code + "）");
+        authHeaders.put("Cookie", landing.cookies);
+        authHeaders.put("Referer", "https://drive.uc.cn/");
+        HttpResult initial = request("POST", "https://api.open.uc.cn/cas/ajax/getTokenForQrcodeLogin?__dt=0&__t=" + now, authHeaders, form(values));
+        if (initial.code != 200) throw new IllegalStateException("UC 二维码请求失败（HTTP " + initial.code + "）");
+        JSONObject result = new JSONObject(initial.body);
         String token = nested(result, "data", "members").optString("token");
         if (result.optInt("status") != 2000000 || token.isEmpty()) throw new IllegalStateException("UC 没有返回有效登录二维码");
         String qr = "https://su.uc.cn/1_n0ZCv?uc_param_str=dsdnfrpfbivesscpgimibtbmnijblauputogpintnwktprchmt&token="
                 + enc(token) + "&client_id=381&uc_biz_str=" + enc("S:custom|C:titlebar_fix");
-        return session("uc", name, token, qr, "请使用 UC 网盘 App 扫码并确认登录", new JSONObject(), false);
+        return session("uc", name, token, qr, "请使用 UC 网盘 App 扫码并确认登录", new JSONObject().put("cookies", mergeCookies(landing.cookies, initial.cookies)), false);
+    }
+
+    private static Session startUcTv(String name) throws Exception {
+        JSONObject r=CloudUcTv.authorize();String query=first(r,"query_token"),qr=first(r,"qr_data");
+        if(r.optInt("status",-1)!=0||query.isEmpty()||qr.isEmpty())throw new IllegalStateException("UC TV 没有返回有效二维码："+first(r,"error_info","message"));
+        return session("uctv",name,query,qr.startsWith("data:")?qr:"data:image/png;base64,"+qr,"请使用UC App扫码确认TV授权（Token由授权兑换服务获取）",new JSONObject(),true);
+    }
+    private static JSONObject pollUcTv(String id, Session session) throws Exception {
+        JSONObject r=CloudUcTv.code(session.token);String code=first(r,"code");
+        if(r.optInt("status",-1)!=0||code.isEmpty())return waiting(session,false,"等待UC App扫码确认TV授权");
+        JSONObject tokens=session.meta.optJSONObject("tvTokens");
+        if(tokens==null){tokens=CloudUcTv.exchange(code);tokens.put("token",tokens.optString("access_token")).put("device_id",CloudUcTv.DEVICE);session.meta.put("tvTokens",tokens);}
+        CloudUcTv.validate(tokens);
+        JSONObject saved=CloudAccountStore.save("","uctv",session.name,tokens);SESSIONS.remove(id);
+        return new JSONObject().put("state","complete").put("message","UC TV授权已保存，请点检查验证有效性").put("accounts",saved.optJSONArray("accounts"));
     }
 
     private static JSONObject pollUc(String id, Session session) throws Exception {
@@ -362,16 +399,35 @@ final class CloudProviderQrService {
         values.put("v", "1.2");
         values.put("request_id", String.valueOf(now));
         values.put("token", session.token);
-        JSONObject result = json("POST", "https://api.open.uc.cn/cas/ajax/getServiceTicketByQrcodeToken?__dt=0&__t=" + now, ucHeaders(), form(values));
+        Map<String, String> authHeaders = ucHeaders();
+        authHeaders.put("User-Agent", UC_WEB_UA);
+        authHeaders.put("Referer", "https://drive.uc.cn/");
+        authHeaders.put("Cookie", session.meta.optString("cookies"));
+        HttpResult ticketResponse = request("POST", "https://api.open.uc.cn/cas/ajax/getServiceTicketByQrcodeToken?__dt=0&__t=" + now, authHeaders, form(values));
+        if (ticketResponse.code != 200) throw new IllegalStateException("UC 扫码票据请求失败（HTTP " + ticketResponse.code + "）");
+        String sessionCookies = mergeCookies(session.meta.optString("cookies"), ticketResponse.cookies);
+        session.meta.put("cookies", sessionCookies);
+        JSONObject result = new JSONObject(ticketResponse.body);
         String ticket = nested(result, "data", "members").optString("service_ticket");
         if (!ticket.isEmpty()) {
-            HttpResult login = request("GET", "https://drive.uc.cn/account/info?st=" + enc(ticket), ucHeaders(), null);
+            authHeaders.put("Cookie", sessionCookies);
+            HttpResult login = request("GET", "https://drive.uc.cn/account/info?st=" + enc(ticket), authHeaders, null);
+            JSONObject accountInfo = login.body.isEmpty() ? new JSONObject() : new JSONObject(login.body);
+            if (login.code != 200 || "AUTH_ERROR".equals(accountInfo.optString("code"))) {
+                return new JSONObject().put("state", "failed").put("message", "UC 扫码已确认，但账号授权兑换失败（HTTP " + login.code + "，code=" + accountInfo.optString("code", "未知") + "），未保存 Cookie");
+            }
             if (login.cookies.isEmpty()) throw new IllegalStateException("UC 没有返回登录 Cookie");
             Map<String, String> headers = ucHeaders();
-            headers.put("Cookie", login.cookies);
+            headers.put("User-Agent", UC_WEB_UA);
+            String loginCookies = mergeCookies(sessionCookies, login.cookies);
+            headers.put("Cookie", loginCookies);
             headers.put("Referer", "https://drive.uc.cn/");
             HttpResult warmup = request("GET", "https://pc-api.uc.cn/1/clouddrive/file/sort?pr=UCBrowser&fr=pc&pdir_fid=0&_page=1&_size=50&_fetch_total=1&_fetch_sub_dirs=0&_sort=file_type:asc,updated_at:desc", headers, null);
-            return saveCookie(id, session, mergeCookies(login.cookies, warmup.cookies), "UC 网盘登录成功，Cookie 已自动保存");
+            JSONObject verified = warmup.body.isEmpty() ? new JSONObject() : new JSONObject(warmup.body);
+            if (warmup.code != 200 || verified.optInt("status", -1) != 200) {
+                return new JSONObject().put("state", "failed").put("message", "UC 扫码已确认，但官方目录登录校验失败（HTTP " + warmup.code + "），未保存 Cookie，请刷新二维码重试");
+            }
+            return saveCookie(id, session, mergeCookies(loginCookies, warmup.cookies), "UC 网盘登录成功，Cookie 已自动保存");
         }
         int status = result.optInt("status");
         if (status == 50004002 || status == 50004003 || status == 50004004) return expired(id, "二维码已失效或登录已取消，请重新获取");
@@ -410,15 +466,16 @@ final class CloudProviderQrService {
     }
 
     /** 123 网盘网页端使用的官方 App 扫码登录协议。 */
+    /** 123 网盘扫码会话必须用 wxCode 换取 Bearer Token，轮询结果本身不是授权凭据。 */
     private static Session start123(String name) throws Exception {
         String loginUuid = sha256(UUID.randomUUID() + ":" + System.nanoTime());
         String clientUniId = UUID.randomUUID().toString();
-        JSONObject root = json("GET", PAN123_LOGIN + "/api/user/qr-code/generate?uniID=" + enc(clientUniId),
-                pan123Headers(loginUuid), null);
-        if (root.optInt("code", -1) != 0) {
-            String message = first(root, "message", "msg");
-            throw new IllegalStateException(message.isEmpty() ? "123 网盘没有返回有效登录二维码" : message);
-        }
+        HttpResult seed = request("GET", PAN123_LOGIN_PAGE, pan123Headers(loginUuid, ""), null);
+        String cookies = seed.cookies;
+        HttpResult response = request("GET", PAN123_LOGIN + "/api/user/qr-code/generate?uniID=" + enc(clientUniId),
+                pan123Headers(loginUuid, cookies), null);
+        JSONObject root = parsePan123(response, "123 网盘没有返回有效登录二维码");
+        if (root.optInt("code", -1) != 0) throw pan123Error(root, "123 网盘没有返回有效登录二维码");
         JSONObject data = root.optJSONObject("data");
         if (data == null) data = new JSONObject();
         String uniId = first(data, "uniID", "uniId");
@@ -426,40 +483,71 @@ final class CloudProviderQrService {
         if (uniId.isEmpty() || qr.isEmpty()) throw new IllegalStateException("123 网盘没有返回有效登录二维码");
         String separator = qr.contains("?") ? "&" : "?";
         qr += separator + "env=production&uniID=" + enc(uniId) + "&source=123pan&type=login";
-        JSONObject meta = new JSONObject().put("loginuuid", loginUuid);
-        return new Session("pan123", name, uniId, qr, System.currentTimeMillis() + 60_000L,
+        JSONObject meta = new JSONObject().put("loginuuid", loginUuid).put("cookies", mergeCookies(cookies, response.cookies));
+        return new Session("pan123", name, uniId, qr, System.currentTimeMillis() + 5 * 60_000L,
                 "请使用 123 云盘 App 扫码并确认登录", meta, false);
     }
 
     private static JSONObject poll123(String id, Session session) throws Exception {
-        JSONObject root = jsonAllowError("GET", PAN123_LOGIN + "/api/user/qr-code/result?uniID=" + enc(session.token),
-                pan123Headers(session.meta.optString("loginuuid")), null);
-        int code = root.optInt("code", -1);
+        String cookies = session.meta.optString("cookies");
+        String loginUuid = session.meta.optString("loginuuid");
+        String resultUrl = PAN123_LOGIN + "/api/user/qr-code/result?uniID=" + enc(session.token) + "&remember=true&gray=true";
+        HttpResult response = request("GET", resultUrl, pan123Headers(loginUuid, cookies), null);
+        session.meta.put("cookies", mergeCookies(cookies, response.cookies));
+        JSONObject root = parsePan123(response, "123 网盘登录状态异常");
+        if (root.optInt("code", -1) != 0) throw pan123Error(root, "123 网盘登录状态异常");
         JSONObject data = root.optJSONObject("data");
         if (data == null) data = new JSONObject();
-        String token = first(data, "token", "access_token", "accessToken");
-        if (code == 200 && !token.isEmpty()) return save123Token(id, session, token);
-        if (code != 0) {
-            String message = first(root, "message", "msg");
-            throw new IllegalStateException(message.isEmpty() ? "123 网盘登录状态异常（" + code + "）" : message);
-        }
         int status = data.optInt("loginStatus", data.optInt("status", 0));
-        if (status == 3 && !token.isEmpty()) return save123Token(id, session, token);
-        if (status == 4) return expired(id, "二维码已过期，请重新获取");
-        if (status == 2) return expired(id, "登录已取消，请重新获取二维码");
-        if (status == 1) return waiting(session, true, "已扫码，请在手机上确认");
-        return waiting(session, false, "等待扫码");
+        if (status == 3) return expired(id, "二维码已过期，请重新获取");
+        if (status == 4) return expired(id, "登录会话已失效，请重新获取二维码");
+        if (status != 1 && status != 2) return waiting(session, false, "等待扫码");
+
+        JSONObject wxPayload = new JSONObject().put("uniID", session.token);
+        HttpResult wxResponse = request("POST", PAN123_LOGIN + "/api/user/qr-code/wx_code",
+                pan123Headers(loginUuid, session.meta.optString("cookies")), jsonBody(wxPayload));
+        session.meta.put("cookies", mergeCookies(session.meta.optString("cookies"), wxResponse.cookies));
+        JSONObject wxRoot = parsePan123(wxResponse, "123 网盘正在等待手机确认");
+        if (wxRoot.optInt("code", -1) != 0) return waiting(session, true, "已扫码，请在手机上确认");
+        JSONObject wxData = wxRoot.optJSONObject("data");
+        String wxCode = wxData == null ? "" : first(wxData, "wxCode", "wechat_code");
+        if (wxCode.isEmpty()) return waiting(session, true, "已扫码，正在完成登录");
+
+        JSONObject loginPayload = new JSONObject().put("from", "web").put("wechat_code", wxCode)
+                .put("type", 4).put("remember", true).put("gray", true);
+        HttpResult loginResponse = request("POST", PAN123_LOGIN + "/api/user/sign_in",
+                pan123Headers(loginUuid, session.meta.optString("cookies")), jsonBody(loginPayload));
+        JSONObject login = parsePan123(loginResponse, "123 网盘登录失败");
+        int code = login.optInt("code", -1);
+        JSONObject loginData = login.optJSONObject("data");
+        String token = loginData == null ? "" : first(loginData, "token", "access_token", "accessToken");
+        if (token.isEmpty()) token = cookieValue(loginResponse.cookies, "sso-token");
+        if ((code != 0 && code != 200) || token.isEmpty()) throw pan123Error(login, "123 网盘没有返回有效授权 Token");
+        return save123Token(id, session, token);
     }
 
     private static JSONObject save123Token(String id, Session session, String token) throws Exception {
         String normalized = token.trim();
         if (normalized.regionMatches(true, 0, "Bearer ", 0, 7)) normalized = normalized.substring(7).trim();
+        if (normalized.isEmpty()) throw new IllegalStateException("123 网盘没有返回有效授权 Token");
         JSONObject values = new JSONObject().put("token", normalized).put("authorization", "Bearer " + normalized)
                 .put("loginuuid", session.meta.optString("loginuuid"));
         JSONObject saved = CloudAccountStore.save("", session.provider, session.name, values);
         SESSIONS.remove(id);
         return new JSONObject().put("state", "complete").put("message", "123 网盘登录成功，Token 已自动保存")
                 .put("accounts", saved.optJSONArray("accounts"));
+    }
+
+    private static JSONObject parsePan123(HttpResult response, String fallback) throws Exception {
+        if (response.body.isEmpty()) throw new IllegalStateException(fallback + "（HTTP " + response.code + "）");
+        JSONObject result = new JSONObject(response.body);
+        if (response.code < 200 || response.code >= 300) throw pan123Error(result, fallback + "（HTTP " + response.code + "）");
+        return result;
+    }
+
+    private static IllegalStateException pan123Error(JSONObject response, String fallback) {
+        String message = first(response, "message", "msg", "error");
+        return new IllegalStateException(message.isEmpty() ? fallback : message);
     }
 
     private static Session startBaidu(String name) throws Exception {
@@ -507,6 +595,17 @@ final class CloudProviderQrService {
     private static JSONObject saveCookie(String id, Session session, String cookie, String message) throws Exception {
         if (cookie == null || cookie.isBlank()) throw new IllegalStateException(CloudAccountStore.providerName(session.provider) + "没有返回登录 Cookie");
         JSONObject saved = CloudAccountStore.save("", session.provider, session.name, new JSONObject().put("cookie", cookie));
+        if ("pan115".equals(session.provider)) {
+            org.json.JSONArray accounts = saved.optJSONArray("accounts");
+            if (accounts != null) for (int i = 0; i < accounts.length(); i++) {
+                JSONObject account = accounts.getJSONObject(i);
+                if (!"pan115".equals(account.optString("provider"))) continue;
+                JSONObject checked = CloudAccountValidator.validate(account.getString("id"));
+                saved = checked;
+                message = "valid".equals(checked.optString("state")) ? checked.optString("message") : "115扫码凭据已保存；账号信息检查未通过，请点击检查重试";
+                break;
+            }
+        }
         SESSIONS.remove(id);
         return new JSONObject().put("state", "complete").put("message", message).put("accounts", saved.optJSONArray("accounts"));
     }
@@ -610,14 +709,15 @@ final class CloudProviderQrService {
         return headers;
     }
 
-    private static Map<String, String> pan123Headers(String loginUuid) {
+    private static Map<String, String> pan123Headers(String loginUuid, String cookies) {
         Map<String, String> headers = headers();
         headers.put("Content-Type", "application/json;charset=UTF-8");
-        headers.put("App-Version", "3");
+        headers.put("App-Version", "132");
         headers.put("Platform", "web");
-        headers.put("Origin", "https://www.123pan.com");
-        headers.put("Referer", "https://www.123pan.com/");
+        headers.put("Origin", "https://user.123pan.cn");
+        headers.put("Referer", PAN123_LOGIN_PAGE);
         if (loginUuid != null && !loginUuid.isEmpty()) headers.put("Loginuuid", loginUuid);
+        if (cookies != null && !cookies.isEmpty()) headers.put("Cookie", cookies);
         return headers;
     }
 
@@ -716,6 +816,23 @@ final class CloudProviderQrService {
      * This fixed response key is used by the current yun.139.com web client and is
      * deliberately different from the per-session AES key used to encrypt login requests.
      */
+    static String normalizeMobile139Token(String source, String sessionKey) throws Exception {
+        // Existing/manual credentials are already plaintext pipe-separated tokens.
+        if (source.contains("|")) return source;
+        try {
+            String decoded = decryptMobile139Token(source);
+            if (decoded.contains("|")) return decoded;
+        } catch (Exception ignored) { }
+        if (sessionKey != null && !sessionKey.isEmpty()) {
+            try {
+                Cipher cipher = Cipher.getInstance("AES/ECB/PKCS5Padding");
+                cipher.init(Cipher.DECRYPT_MODE, new SecretKeySpec(sessionKey.getBytes(StandardCharsets.UTF_8), "AES"));
+                String decoded = new String(cipher.doFinal(Base64.decode(source, Base64.DEFAULT)), StandardCharsets.UTF_8);
+                if (decoded.contains("|")) return decoded;
+            } catch (Exception ignored) { }
+        }
+        throw new IllegalStateException("移动扫码返回的 Token 未能转换为官方授权格式，请重新扫码；未保存无效 Token");
+    }
     private static String decryptMobile139Token(String source) throws Exception {
         byte[] packed = Base64.decode(source, Base64.DEFAULT);
         if (packed.length <= 16 || (packed.length - 16) % 16 != 0) {
@@ -802,6 +919,15 @@ final class CloudProviderQrService {
             int equal = part.indexOf('=');
             if (equal > 0) values.put(part.substring(0, equal).trim(), part.substring(equal + 1).trim());
         }
+    }
+
+    private static String cookieValue(String source, String key) {
+        if (source == null || source.isEmpty()) return "";
+        for (String part : source.split(";")) {
+            int equal = part.indexOf('=');
+            if (equal > 0 && key.equals(part.substring(0, equal).trim())) return part.substring(equal + 1).trim();
+        }
+        return "";
     }
 
     private static String cookieObject(JSONObject object) {

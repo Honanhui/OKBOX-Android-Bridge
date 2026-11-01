@@ -3,7 +3,6 @@ package com.fongmi.android.tv.server;
 import com.fongmi.android.tv.BuildConfig;
 import com.fongmi.android.tv.server.impl.Process;
 import com.fongmi.android.tv.server.process.Spider;
-import com.fongmi.android.tv.server.process.GuardInspect;
 import com.fongmi.android.tv.server.process.Sources;
 import com.fongmi.android.tv.server.process.Media;
 import com.fongmi.android.tv.server.process.Health;
@@ -29,7 +28,6 @@ public class Nano extends NanoHTTPD {
         process.add(new Health());
         process.add(new com.fongmi.android.tv.server.process.Trace());
         process.add(new Spider());
-        if (BuildConfig.DEBUG) process.add(new GuardInspect());
         process.add(new Sources());
         process.add(new com.fongmi.android.tv.server.process.Subscriptions());
         process.add(new Media());
