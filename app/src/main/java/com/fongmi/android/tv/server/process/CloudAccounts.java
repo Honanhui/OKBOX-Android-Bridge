@@ -37,9 +37,9 @@ public final class CloudAccounts implements Process {
             if ("auth-start".equals(action)) return json(CloudAuthService.start(request.optString("provider"), request.optString("name")));
             if ("auth-poll".equals(action)) return json(CloudAuthService.poll(request.optString("sessionId")));
             if ("auth-cancel".equals(action)) return json(CloudAuthService.cancel(request.optString("sessionId")));
-            if ("tianyi-interactive-login".equals(action)) return json(CloudTianyi.login(request.optString("id"), false));
-            if ("tianyi-sms-send".equals(action)) return json(CloudTianyi.send(request.optString("id")));
-            if ("tianyi-sms-submit".equals(action)) return json(CloudTianyi.submit(request.optString("id"), request.optString("code")));
+            if ("tianyi-interactive-login".equals(action)) throw new IllegalArgumentException("天翼已改为扫码登录，请获取登录二维码");
+            if ("tianyi-sms-send".equals(action)) throw new IllegalArgumentException("天翼已改为扫码登录，不再发送短信验证码");
+            if ("tianyi-sms-submit".equals(action)) throw new IllegalArgumentException("天翼已改为扫码登录，不再提交短信验证码");
             if ("authorization".equals(action)) return json(authorization(request.optString("provider")));
             return error(NanoHTTPD.Response.Status.BAD_REQUEST, "Unknown account action");
         } catch (IllegalArgumentException e) {

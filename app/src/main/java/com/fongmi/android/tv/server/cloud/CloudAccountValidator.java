@@ -29,7 +29,7 @@ public final class CloudAccountValidator {
         JSONObject secret = account.optJSONObject("secret");
         if (secret == null) secret = new JSONObject();
         try {
-            if ("tianyi".equals(provider)) return CloudTianyi.validate(id);
+            if ("tianyi".equals(provider)) return CloudTianyiQr.validate(id);
             String message = switch (provider) {
                 case "aliyun" -> validateAliyun();
                 case "uc" -> validateUc(secret);
@@ -58,7 +58,7 @@ public final class CloudAccountValidator {
     public static JSONObject login(String id) throws Exception {
         JSONObject account = CloudAccountStore.account(id);
         if ("tianyi".equals(account.optString("provider"))) {
-            try { return CloudTianyi.login(id); }
+            try { return CloudTianyiQr.validate(id); }
             catch (Exception error) { return CloudAccountStore.setValidation(id, "invalid", error.getMessage() == null ? "天翼登录失败" : error.getMessage()); }
         }
         if (!"thunder".equals(account.optString("provider"))) return validate(id);

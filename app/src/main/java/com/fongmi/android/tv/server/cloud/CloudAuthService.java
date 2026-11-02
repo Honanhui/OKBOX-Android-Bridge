@@ -39,12 +39,14 @@ public final class CloudAuthService {
     }
 
     public static JSONObject cancel(String id) throws Exception {
+        if (id != null && id.startsWith("tianyi-web:")) return CloudTianyiQr.cancel(id);
         if (id != null && id.startsWith(CloudProviderQrService.PREFIX)) return CloudProviderQrService.cancel(id);
         if (id != null) SESSIONS.remove(id);
         return new JSONObject().put("state", "cancelled").put("message", "登录已取消");
     }
 
     public static JSONObject start(String provider, String name) throws Exception {
+        if ("tianyi".equals(provider)) return CloudTianyiQr.start(name);
         cleanup();
         if (!"aliyun".equals(provider)) return CloudProviderQrService.start(provider, name);
         String payload;
@@ -81,6 +83,7 @@ public final class CloudAuthService {
     }
 
     public static JSONObject poll(String id) throws Exception {
+        if (id != null && id.startsWith("tianyi-web:")) return CloudTianyiQr.poll(id);
         if (id != null && id.startsWith(CloudProviderQrService.PREFIX)) return CloudProviderQrService.poll(id);
         Session session = SESSIONS.get(id);
         if (session == null) throw new IllegalArgumentException("登录会话不存在或已失效，请重新获取二维码");

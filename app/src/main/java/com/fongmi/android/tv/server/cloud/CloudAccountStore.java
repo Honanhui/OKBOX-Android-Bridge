@@ -113,7 +113,7 @@ public final class CloudAccountStore {
         }
         // Preserve provider protocol metadata together with the encrypted secret.
         // Mobile's QR token alone is insufficient for the native Cat session.
-        for (String field : new String[]{"account", "auth_token", "userDomainId", "loginData", "token_type", "sub", "user_id", "expires_in", "expires_at"}) {
+        for (String field : new String[]{"browser_id", "account", "auth_token", "userDomainId", "loginData", "token_type", "sub", "user_id", "expires_in", "expires_at"}) {
             if (values.has(field) && !values.isNull(field)) secret.put(field, values.get(field));
         }
         for (String field : provider.required) {
@@ -473,7 +473,7 @@ public final class CloudAccountStore {
         add(items, new Provider("pan115", "115 网盘", "cookie", "0", 2, new String[]{"cookie"}, "Cookie"));
         add(items, new Provider("pan123community", "123社区", "cookie", "0", 1, new String[]{"cookie"}, "123社区 Cookie（登录 pan1.me 后获取）"));
         add(items, new Provider("pan123", "123 网盘", "password", "0", 1, new String[]{"username", "password"}, "账号", "密码"));
-        add(items, new Provider("tianyi", "天翼云盘", "password", "-11", 1, new String[]{"username", "password"}, "账号", "密码"));
+        add(items, new Provider("tianyi", "天翼云盘", "cookie", "-11", 1, new String[]{"cookie"}, "Cookie"));
         add(items, new Provider("mobile139", "移动云盘", "token", "0", 1, new String[]{"token"}, "令牌"));
         add(items, new Provider("bilibili", "B站", "cookie", "0", 1, new String[]{"cookie"}, "Cookie"));
         add(items, new Provider("thunder", "迅雷云盘", "password", "0", 1, new String[]{"username", "password"}, "账号", "密码"));
